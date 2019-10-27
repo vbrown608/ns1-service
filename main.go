@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/boltdb/bolt"
+	"github.com/gorilla/mux"
 	ns1 "gopkg.in/ns1/ns1-go.v2/rest"
 	models "gopkg.in/ns1/ns1-go.v2/rest/model/dns"
 )
@@ -30,89 +31,75 @@ type zoneStore interface {
 	Delete(string) error
 }
 
-func (c *apiConfig) routes() *http.ServeMux {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/zones", c.handleZones())
-	return mux
+func (c *apiConfig) routes() *mux.Router {
+	r := mux.NewRouter()
+	r.HandleFunc("/zones", c.putZone()).Methods("PUT")
+	// r.HandleFunc("/zones/{zName}", c.updateZone()).Methods("POST")
+	r.HandleFunc("/zones/{zName}", c.deleteZone()).Methods("DELETE")
+	return r
 }
 
-func (c *apiConfig) handleZones() http.HandlerFunc {
+func (c *apiConfig) putZone() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		dec := json.NewDecoder(r.Body)
 		var z models.Zone
 		err := dec.Decode(&z)
 		if err != nil {
-			log.Fatal(err)
+			// @TODO custom error messages.
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
-
-		var resp *http.Response
-		switch r.Method {
-		case http.MethodPut:
-			resp, err := c.zonesService.Create(&z)
-			if err != nil {
-				c.Error("Failed to create zone", w)
-				return
-			}
-			// Update our zone with the values returned by NS1
-			// That way our records will capture the id, defaults, etc. that they've
-			// chosen.
-			dec := json.NewDecoder(resp.Body)
-			err = dec.Decode(&z)
-			if err != nil {
-				c.Error("Failed to create zone", w)
-				return
-			}
-
-			err = c.db.PutZone(z)
-			if err != nil {
-				c.Error("Failed to create zone", w)
-				return
-			}
-
-			instructions := struct {
-				DNSServers []string `json:"dns_servers"`
-				Message    string   `json:"message"`
-			}{
-				DNSServers: z.DNSServers,
-				Message:    `Set your domain's DNS servers to the hosts listed here. Normally you will do this in your domain registrar's portal. If this zone is a subdomain, you can do this by subdelegating the subdomain using NS records in the parent zone's DNS.`,
-			}
-			out, err := json.Marshal(instructions)
-			if err != nil {
-				c.Error("Error formatting zone instructions", w)
-				return
-			}
-			w.Write(out)
-		case http.MethodPost:
-			resp, err = c.zonesService.Update(&z)
-			io.Copy(w, resp.Body)
-		case http.MethodDelete:
-			resp, err = c.zonesService.Delete(z.Zone)
-			io.Copy(w, resp.Body)
-		default:
-			// Respond with method not supported
+		resp, err := c.zonesService.Create(&z)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		// @TODO check response status
+
+		// Update our zone with the values returned by NS1
+		// That way our records will capture the id, defaults, etc.
+		dec = json.NewDecoder(resp.Body)
+		err = dec.Decode(&z)
 		if err != nil {
-			log.Fatal(err)
-			// Respond with 500
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
-		// Set status of w to resp.Status
+
+		err = c.db.PutZone(z)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		instructions := struct {
+			DNSServers []string `json:"dns_servers"`
+			Message    string   `json:"message"`
+		}{
+			DNSServers: z.DNSServers,
+			Message:    `Set your domain's DNS servers to the hosts listed here. Normally you will do this in your domain registrar's portal. If this zone is a subdomain, you can do this by subdelegating the subdomain using NS records in the parent zone's DNS.`,
+		}
+		enc := json.NewEncoder(w)
+		if err := enc.Encode(instructions); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
 	}
 }
 
-func (c *apiConfig) Error(msg string, w http.ResponseWriter) {
-
-}
-
-func (c *apiConfig) handleRecords() http.HandlerFunc {
+func (c *apiConfig) deleteZone() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodPut:
-		case http.MethodPost:
-		case http.MethodDelete:
-		default:
-			// Method not supported
+		zName := mux.Vars(r)["zName"]
+		resp, err := c.zonesService.Delete(zName)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
+		if resp.StatusCode != http.StatusOK {
+			// @TODO
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.Copy(w, resp.Body)
 	}
 }
 
