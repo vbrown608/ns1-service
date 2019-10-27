@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/boltdb/bolt"
 	models "gopkg.in/ns1/ns1-go.v2/rest/model/dns"
 )
 
@@ -19,8 +20,18 @@ type mockZoneService struct {
 }
 
 func TestMain(m *testing.M) {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+	boltDB, err := bolt.Open("./ns1_test.db", 0600, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer boltDB.Close()
+	db := database{boltDB}
+	db.Init()
+
 	conf = apiConfig{
 		zonesService: &mockZoneService{},
+		db:           db,
 	}
 	mux := conf.routes()
 	ts = httptest.NewServer(mux)
@@ -29,7 +40,6 @@ func TestMain(m *testing.M) {
 }
 
 func (zs *mockZoneService) Create(z *models.Zone) (*http.Response, error) {
-	log.Println(z)
 	if z.Zone == "newzone.com" {
 		f, err := os.Open("fixtures/create-200.json")
 		if err != nil {
@@ -43,8 +53,12 @@ func (zs *mockZoneService) Create(z *models.Zone) (*http.Response, error) {
 	}
 	return nil, nil
 }
-func (zs *mockZoneService) Update(*models.Zone) (resp *http.Response, err error) { return }
-func (zs *mockZoneService) Delete(string) (resp *http.Response, err error)       { return }
+
+func (zs *mockZoneService) Update(*models.Zone) (*http.Response, error) {
+	return &http.Response{}, nil
+}
+
+func (zs *mockZoneService) Delete(string) (resp *http.Response, err error) { return }
 
 func TestCreateZone(t *testing.T) {
 	jsonBody := `{"zone":"newzone.com"}`
@@ -64,6 +78,12 @@ func TestCreateZone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	dbZones, err := conf.db.GetZone("newzone.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	log.Println(dbZones)
 	// Expect zone with ID
 	log.Println(string(body))
 }
