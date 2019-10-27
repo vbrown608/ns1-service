@@ -50,23 +50,38 @@ func (c *apiConfig) handleZones() http.HandlerFunc {
 		case http.MethodPut:
 			resp, err := c.zonesService.Create(&z)
 			if err != nil {
-				// @TODO
+				c.Error("Failed to create zone", w)
+				return
 			}
 			// Update our zone with the values returned by NS1
-			// That way our records will capture the id, defaults, etc. that they've chosen.
+			// That way our records will capture the id, defaults, etc. that they've
+			// chosen.
 			dec := json.NewDecoder(resp.Body)
 			err = dec.Decode(&z)
 			if err != nil {
-				log.Fatal(err)
-				// @TODO
+				c.Error("Failed to create zone", w)
+				return
 			}
 
 			err = c.db.PutZone(z)
 			if err != nil {
-				log.Fatal(err)
-				// @TODO
+				c.Error("Failed to create zone", w)
+				return
 			}
-			w.Write([]byte("It worked"))
+
+			instructions := struct {
+				DNSServers []string `json:"dns_servers"`
+				Message    string   `json:"message"`
+			}{
+				DNSServers: z.DNSServers,
+				Message:    `Set your domain's DNS servers to the hosts listed here. Normally you will do this in your domain registrar's portal. If this zone is a subdomain, you can do this by subdelegating the subdomain using NS records in the parent zone's DNS.`,
+			}
+			out, err := json.Marshal(instructions)
+			if err != nil {
+				c.Error("Error formatting zone instructions", w)
+				return
+			}
+			w.Write(out)
 		case http.MethodPost:
 			resp, err = c.zonesService.Update(&z)
 			io.Copy(w, resp.Body)
@@ -85,9 +100,8 @@ func (c *apiConfig) handleZones() http.HandlerFunc {
 	}
 }
 
-func (c *apiConfig) createZone(z models.Zone) {
+func (c *apiConfig) Error(msg string, w http.ResponseWriter) {
 
-	// @TODO return instructions
 }
 
 func (c *apiConfig) handleRecords() http.HandlerFunc {

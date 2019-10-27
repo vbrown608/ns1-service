@@ -21,6 +21,7 @@ type mockZoneService struct {
 
 func TestMain(m *testing.M) {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
+	// @TODO use a tempfile, remove it after test run
 	boltDB, err := bolt.Open("./ns1_test.db", 0600, nil)
 	if err != nil {
 		log.Fatal(err)
@@ -79,13 +80,19 @@ func TestCreateZone(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dbZones, err := conf.db.GetZone("newzone.com")
+	dbZone, err := conf.db.GetZone("newzone.com")
 	if err != nil {
 		t.Fatal(err)
 	}
-	log.Println(dbZones)
-	// Expect zone with ID
-	log.Println(string(body))
+	if dbZone.ID != "52051b2c9f782d58bb4df41b" {
+		t.Fatal("Failed to persist zone")
+	}
+	if !strings.Contains(string(body), "dns1.p06.nsone.net") {
+		t.Fatal("Failed to respond with DNS servers")
+	}
+	if !strings.Contains(string(body), "Set your domain's DNS") {
+		t.Fatal("Failed to respond with configuration instructions")
+	}
 }
 
 func TestUpdateZone(t *testing.T) {
