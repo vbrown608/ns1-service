@@ -14,6 +14,8 @@ import (
 	models "gopkg.in/ns1/ns1-go.v2/rest/model/dns"
 )
 
+// apiConfig holds the service configuration, including references to services
+// exposed by ns1 and the datastore.
 type apiConfig struct {
 	*http.ServeMux
 	zonesService
@@ -21,6 +23,9 @@ type apiConfig struct {
 	db database
 }
 
+// zoneService describes a service for CRUD operations on DNS zones. It allows
+// us to implement a mock zone service for testing rather than hitting NS1's
+// API directly.
 type zonesService interface {
 	Create(*models.Zone) (*http.Response, error)
 	Get(string) (*models.Zone, *http.Response, error)
@@ -28,10 +33,12 @@ type zonesService interface {
 	Delete(string) (*http.Response, error)
 }
 
+// zoneService describes a service for CRUD operations on DNS record.
 type recordsService interface {
 	Create(*models.Record) (*http.Response, error)
-	Update(*models.Record) (*http.Response, error)
-	Delete(string) (*http.Response, error)
+	// @TODO
+	// Update(*models.Record) (*http.Response, error)
+	// Delete(string, string, string) (*http.Response, error)
 }
 
 func (c *apiConfig) routes() *mux.Router {
@@ -43,6 +50,7 @@ func (c *apiConfig) routes() *mux.Router {
 	return r
 }
 
+// putZone returns an http.HandlerFunc that adds a DNS zone to NS1 and our datastore.
 func (c *apiConfig) putZone() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		dec := json.NewDecoder(r.Body)
@@ -66,6 +74,8 @@ func (c *apiConfig) putZone() http.HandlerFunc {
 			return
 		}
 
+		// c.zoneService loads the update zone returned by NS's API into z.
+		// Persisting z stores the user inputs as well as the defaults set by NS1.
 		err = c.handleUpdatedZone(z, w)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -73,6 +83,7 @@ func (c *apiConfig) putZone() http.HandlerFunc {
 	}
 }
 
+// updateZone returns an http.HandlerFunc that updates a DNS zone
 func (c *apiConfig) updateZone() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		dec := json.NewDecoder(r.Body)
@@ -95,7 +106,6 @@ func (c *apiConfig) updateZone() http.HandlerFunc {
 		}
 		if resp.StatusCode != http.StatusOK {
 			// Proxy error to client
-			log.Println(resp.StatusCode)
 			io.Copy(w, resp.Body)
 			w.WriteHeader(resp.StatusCode)
 			return
@@ -107,9 +117,10 @@ func (c *apiConfig) updateZone() http.HandlerFunc {
 	}
 }
 
+// handleUpdatedZone updates our zone record with the values returned by NS1.
+// It responds with instructions for configuring a domain name with a
+// registrar.
 func (c *apiConfig) handleUpdatedZone(z models.Zone, w http.ResponseWriter) error {
-	// Update our zone with the values returned by NS1
-	// That way our records will capture the id, defaults, etc.
 	err := c.db.PutZone(z)
 	if err != nil {
 		return err
@@ -156,6 +167,7 @@ func (c *apiConfig) putRecord() http.HandlerFunc {
 		err := dec.Decode(&rec)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 		resp, err := c.recordsService.Create(&rec)
 		if err != nil {
@@ -177,8 +189,10 @@ func (c *apiConfig) putRecord() http.HandlerFunc {
 	}
 }
 
+// syncZone requests a zone from NS1's API and writes it to storage.
+// We use this to update the records portion of a zone document after updating
+// a record.
 func (c *apiConfig) syncZone(zName string) error {
-	// Store records within Zone documents using NS1's `dns.ZoneRecord`
 	z, _, err := c.zonesService.Get(zName)
 	if err != nil {
 		return err
@@ -205,9 +219,9 @@ func main() {
 		ns1.SetAPIKey(os.Getenv("NS1_API_KEY")),
 	)
 	conf := apiConfig{
-		zonesService: ns1Client.Zones,
-		// recordsService: ns1Client.Records,
-		db: db,
+		zonesService:   ns1Client.Zones,
+		recordsService: ns1Client.Records,
+		db:             db,
 	}
 	mux := conf.routes()
 	log.Fatal(http.ListenAndServe(":"+os.Getenv("PORT"), mux))
