@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -16,17 +17,12 @@ import (
 var ts *httptest.Server
 var conf apiConfig
 
-type mockZoneService struct {
-}
-
 func TestMain(m *testing.M) {
-	log.SetFlags(log.LstdFlags | log.Lshortfile)
-	// @TODO use a tempfile, remove it after test run
-	boltDB, err := bolt.Open("./ns1_test.db", 0600, nil)
+	boltDB, err := bolt.Open(tempfile(), 0600, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer boltDB.Close()
+	defer os.Remove(boltDB.Path())
 	db := database{boltDB}
 	db.Init()
 
@@ -39,6 +35,8 @@ func TestMain(m *testing.M) {
 	defer ts.Close()
 	os.Exit(m.Run())
 }
+
+type mockZoneService struct{}
 
 func (zs *mockZoneService) Create(z *models.Zone) (*http.Response, error) {
 	if z.Zone == "newzone.com" {
@@ -55,13 +53,35 @@ func (zs *mockZoneService) Create(z *models.Zone) (*http.Response, error) {
 	return nil, nil
 }
 
-func (zs *mockZoneService) Update(*models.Zone) (*http.Response, error) {
-	return &http.Response{}, nil
+func (zs *mockZoneService) Get(string) (*models.Zone, *http.Response, error) {
+	return &models.Zone{}, &http.Response{}, nil
 }
 
-func (zs *mockZoneService) Delete(string) (resp *http.Response, err error) { return }
+func (zs *mockZoneService) Update(z *models.Zone) (*http.Response, error) {
+	if z.Zone == "newzone.com" {
+		f, err := os.Open("fixtures/update-200.json")
+		if err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: 200,
+			Body:       f,
+			Header:     make(http.Header),
+		}, nil
+	}
+	return nil, nil
+}
 
-func TestCreateZone(t *testing.T) {
+func (zs *mockZoneService) Delete(string) (resp *http.Response, err error) {
+	return &http.Response{
+		StatusCode: 200,
+		Body:       ioutil.NopCloser(bytes.NewBufferString("")),
+		Header:     make(http.Header),
+	}, nil
+}
+
+func TestCreateUpdateDeleteZone(t *testing.T) {
+	// CREATE
 	jsonBody := `{"zone":"newzone.com"}`
 	client := &http.Client{}
 	req, err := http.NewRequest(http.MethodPut, ts.URL+"/zones", strings.NewReader(jsonBody))
@@ -76,6 +96,7 @@ func TestCreateZone(t *testing.T) {
 		t.Fatalf("POST to /zones failed with %d", resp.StatusCode)
 	}
 	body, err := ioutil.ReadAll(resp.Body)
+	resp.Body.Close()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,21 +114,59 @@ func TestCreateZone(t *testing.T) {
 	if !strings.Contains(string(body), "Set your domain's DNS") {
 		t.Fatal("Failed to respond with configuration instructions")
 	}
-}
 
-func TestUpdateZone(t *testing.T) {
-	jsonBody := `{"zone":"newzone.com"}`
-	resp, err := http.Post(ts.URL+"/zones", "application/json", strings.NewReader(jsonBody))
+	// UPDATE
+	jsonBody = `{"TTL":1337}`
+	resp, err = http.Post(ts.URL+"/zones/newzone.com", "application/json", strings.NewReader(jsonBody))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("POST to /zones failed with %d", resp.StatusCode)
+		t.Errorf("POST to /zones failed with %d", resp.StatusCode)
 	}
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err = ioutil.ReadAll(resp.Body)
+	resp.Body.Close()
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Expect zone with ID
-	log.Println(string(body))
+	dbZone, err = conf.db.GetZone("newzone.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dbZone.TTL != 1337 {
+		log.Println(dbZone.TTL)
+		t.Fatal("Failed to update zone")
+	}
+	if !strings.Contains(string(body), "dns1.p06.nsone.net") {
+		t.Fatal("Failed to respond with DNS servers")
+	}
+
+	// DELETE
+	client = &http.Client{}
+	req, err = http.NewRequest(http.MethodDelete, ts.URL+"/zones/newzone.com", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("DELETE zone failed with failed with %d", resp.StatusCode)
+	}
+}
+
+// tempfile returns a temporary file path.
+func tempfile() string {
+	f, err := ioutil.TempFile("", "bolt-")
+	if err != nil {
+		panic(err)
+	}
+	if err := f.Close(); err != nil {
+		panic(err)
+	}
+	if err := os.Remove(f.Name()); err != nil {
+		panic(err)
+	}
+	return f.Name()
 }
