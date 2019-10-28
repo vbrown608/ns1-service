@@ -59,7 +59,6 @@ func (c *apiConfig) putZone() http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			// Proxy error to client
 			w.WriteHeader(resp.StatusCode)
@@ -67,7 +66,7 @@ func (c *apiConfig) putZone() http.HandlerFunc {
 			return
 		}
 
-		err = c.handleUpdatedZone(resp, w)
+		err = c.handleUpdatedZone(z, w)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
@@ -94,35 +93,27 @@ func (c *apiConfig) updateZone() http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			// Proxy error to client
+			log.Println(resp.StatusCode)
 			io.Copy(w, resp.Body)
 			w.WriteHeader(resp.StatusCode)
 			return
 		}
-		err = c.handleUpdatedZone(resp, w)
+		err = c.handleUpdatedZone(z, w)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	}
 }
 
-func (c *apiConfig) handleUpdatedZone(updated *http.Response, w http.ResponseWriter) error {
+func (c *apiConfig) handleUpdatedZone(z models.Zone, w http.ResponseWriter) error {
 	// Update our zone with the values returned by NS1
 	// That way our records will capture the id, defaults, etc.
-	var z models.Zone
-	dec := json.NewDecoder(updated.Body)
-	err := dec.Decode(&z)
+	err := c.db.PutZone(z)
 	if err != nil {
 		return err
 	}
-
-	err = c.db.PutZone(z)
-	if err != nil {
-		return err
-	}
-
 	instructions := struct {
 		DNSServers []string `json:"dns_servers"`
 		Message    string   `json:"message"`
@@ -171,7 +162,6 @@ func (c *apiConfig) putRecord() http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			// Proxy error to client
 			w.WriteHeader(resp.StatusCode)
@@ -182,6 +172,7 @@ func (c *apiConfig) putRecord() http.HandlerFunc {
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
+		// @TODO respond with JSONified rec
 		w.WriteHeader(http.StatusOK)
 	}
 }
@@ -215,8 +206,9 @@ func main() {
 	)
 	conf := apiConfig{
 		zonesService: ns1Client.Zones,
-		db:           db,
+		// recordsService: ns1Client.Records,
+		db: db,
 	}
 	mux := conf.routes()
-	log.Fatal(http.ListenAndServe(":8080", mux))
+	log.Fatal(http.ListenAndServe(":"+os.Getenv("PORT"), mux))
 }

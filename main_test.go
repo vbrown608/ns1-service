@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -46,9 +47,9 @@ func (zs *mockZoneService) Create(z *models.Zone) (*http.Response, error) {
 		}
 		return &http.Response{
 			StatusCode: 200,
-			Body:       f,
+			Body:       ioutil.NopCloser(bytes.NewBufferString("")),
 			Header:     make(http.Header),
-		}, nil
+		}, json.NewDecoder(f).Decode(z)
 	}
 	return nil, nil
 }
@@ -65,9 +66,9 @@ func (zs *mockZoneService) Update(z *models.Zone) (*http.Response, error) {
 		}
 		return &http.Response{
 			StatusCode: 200,
-			Body:       f,
+			Body:       ioutil.NopCloser(bytes.NewBufferString("")),
 			Header:     make(http.Header),
-		}, nil
+		}, json.NewDecoder(f).Decode(z)
 	}
 	return nil, nil
 }
